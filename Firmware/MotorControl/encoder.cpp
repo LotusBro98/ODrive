@@ -18,9 +18,15 @@ static void enc_index_cb_wrapper(void* ctx) {
     reinterpret_cast<Encoder*>(ctx)->enc_index_cb();
 }
 
+int init_cs_gpio_pin(int pin);
+
 void Encoder::setup() {
     HAL_TIM_Encoder_Start(hw_config_.timer, TIM_CHANNEL_ALL);
     set_idx_subscribe();
+    init_cs_gpio_pin(config_.default_cs_pin);
+    osDelay(100);
+    if (config_.ask_abs_enc_on_setup)
+        update_encoder_spi();
 }
 
 void Encoder::set_error(Error_t error) {
@@ -153,6 +159,144 @@ bool Encoder::run_direction_find() {
     }
 
     return status;
+}
+
+int init_cs_gpio_pin(int pin) {
+    auto abs_spi_cs_port_ = get_gpio_port_by_pin(pin);
+    auto abs_spi_cs_pin_ = get_gpio_pin_by_pin(pin);
+
+    // Init cs pin
+    HAL_GPIO_DeInit(abs_spi_cs_port_, abs_spi_cs_pin_);
+    GPIO_InitTypeDef GPIO_InitStruct;
+    GPIO_InitStruct.Pin = abs_spi_cs_pin_;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(abs_spi_cs_port_, &GPIO_InitStruct);
+
+    // Write pin high
+    HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_SET);
+    delay_us(10);
+
+    return true;
+}
+
+HAL_StatusTypeDef init_spi(SPI_HandleTypeDef* spi) {
+    spi->Init.Mode = SPI_MODE_MASTER;
+    spi->Init.Direction = SPI_DIRECTION_2LINES;
+    spi->Init.DataSize = SPI_DATASIZE_8BIT;
+    spi->Init.CLKPolarity = SPI_POLARITY_LOW;
+    spi->Init.CLKPhase = SPI_PHASE_2EDGE;
+    spi->Init.NSS = SPI_NSS_SOFT;
+    spi->Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+    spi->Init.FirstBit = SPI_FIRSTBIT_MSB;
+    spi->Init.TIMode = SPI_TIMODE_DISABLE;
+    spi->Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+    spi->Init.CRCPolynomial = 10;
+
+    HAL_StatusTypeDef status;
+
+    status = HAL_SPI_DeInit(spi);
+    if (status != HAL_OK)
+        return status;
+    status = HAL_SPI_Init(spi);
+
+    return status;
+}
+
+uint8_t enc_spi_tx_rx(SPI_HandleTypeDef* spi, int cs_pin, HAL_StatusTypeDef* status, uint8_t send) {
+    auto abs_spi_cs_port_ = get_gpio_port_by_pin(cs_pin);
+    auto abs_spi_cs_pin_ = get_gpio_pin_by_pin(cs_pin);
+
+    uint8_t recv;
+
+    HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_RESET);
+    *status = HAL_SPI_TransmitReceive(spi, &send, &recv, 1, 1000);
+    HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_SET);
+    osDelay(1);
+
+    return recv;
+}
+
+int Encoder::get_encoder_spi(int cs_pin) {
+    uint32_t enc;
+    uint32_t cr1, cr2;
+    uint8_t recv;
+    uint8_t msb, lsb;
+    int retries = 10;
+    SPI_InitTypeDef init;
+
+
+    init_cs_gpio_pin(cs_pin);
+
+    init = hspi3.Init;
+    cr1 = hspi3.Instance->CR1;
+    cr2 = hspi3.Instance->CR2;
+
+    HAL_StatusTypeDef status;
+
+    SPI_HandleTypeDef* spi = &hspi3;
+
+    status = init_spi(spi);
+    if (status != HAL_OK) goto error;
+
+    recv = enc_spi_tx_rx(spi, cs_pin, &status, 0x10);
+    if (status != HAL_OK) goto error;
+    recv = enc_spi_tx_rx(spi, cs_pin, &status, 0x10);
+    if (status != HAL_OK) goto error;
+
+    recv = enc_spi_tx_rx(spi, cs_pin, &status, 0x00);
+    if (status != HAL_OK) goto error;
+
+    while (recv != 0x10) {
+        recv = enc_spi_tx_rx(spi, cs_pin, &status, 0x00);
+        if (status != HAL_OK) goto error;
+
+        if (retries-- <= 0)
+            goto error;
+    }
+
+    msb = enc_spi_tx_rx(spi, cs_pin, &status, 0x00) & 0x0F;
+    if (status != HAL_OK) goto error;
+
+    lsb = enc_spi_tx_rx(spi, cs_pin, &status, 0x00);
+    if (status != HAL_OK) goto error;
+
+    enc = ((uint32_t)msb) << 8 | (uint32_t)lsb;
+
+    hspi3.Instance->CR1 = cr1;
+    hspi3.Instance->CR2 = cr2;
+    hspi3.Init = init;
+    status = HAL_SPI_DeInit(spi);
+    if (status != HAL_OK)
+        return status;
+    status = HAL_SPI_Init(spi);
+
+    return enc;
+
+    error:
+    hspi3.Instance->CR1 = cr1;
+    hspi3.Instance->CR2 = cr2;
+    hspi3.Init = init;
+    status = HAL_SPI_DeInit(spi);
+    if (status != HAL_OK)
+        return status;
+    status = HAL_SPI_Init(spi);
+
+    return -1;
+}
+
+int32_t Encoder::update_encoder_spi(){
+    int enc;
+    for (int retries = 10; retries > 0; retries--) {
+        enc = get_encoder_spi(config_.default_cs_pin);
+        if (enc >= 0) {
+            set_linear_count(enc);
+            is_ready_ = true;
+            return enc;
+        }
+    }
+    return enc;
 }
 
 // @brief Turns the motor in one direction for a bit and then in the other

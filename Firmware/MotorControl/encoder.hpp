@@ -43,6 +43,8 @@ public:
         bool find_idx_on_lockin_only = false; // Only be sensitive during lockin scan constant vel state
         bool idx_search_unidirectional = false; // Only allow index search in known direction
         bool ignore_illegal_hall_state = false; // dont error on bad states like 000 or 111
+        int32_t default_cs_pin = 7;             // default SPI CS pin for abs encoder
+        bool ask_abs_enc_on_setup = true;       // Whether or not ask abs encoder pos on startup
     };
 
     Encoder(const EncoderHardwareConfig_t& hw_config,
@@ -56,6 +58,9 @@ public:
     void set_idx_subscribe(bool override_enable = false);
     void update_pll_gains();
     void check_pre_calibrated();
+
+    int get_encoder_spi(int cs_pin);
+    int32_t update_encoder_spi();
 
     void set_linear_count(int32_t count);
     void set_circular_count(int32_t count, bool update_offset);
@@ -129,9 +134,12 @@ public:
                 make_protocol_property("calib_scan_distance", &config_.calib_scan_distance),
                 make_protocol_property("calib_scan_omega", &config_.calib_scan_omega),
                 make_protocol_property("idx_search_unidirectional", &config_.idx_search_unidirectional),
-                make_protocol_property("ignore_illegal_hall_state", &config_.ignore_illegal_hall_state)
+                make_protocol_property("ignore_illegal_hall_state", &config_.ignore_illegal_hall_state),
+                make_protocol_property("default_cs_pin", &config_.default_cs_pin),
+                make_protocol_property("ask_abs_enc_on_setup", &config_.ask_abs_enc_on_setup)
             ),
-            make_protocol_function("set_linear_count", *this, &Encoder::set_linear_count, "count")
+            make_protocol_function("set_linear_count", *this, &Encoder::set_linear_count, "count"),
+            make_protocol_function("update_encoder_spi", *this, &Encoder::update_encoder_spi)
         );
     }
 };

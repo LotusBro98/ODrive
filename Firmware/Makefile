@@ -9,9 +9,12 @@ OPENOCD := openocd -f interface/stlink-v2.cfg \
 		$(if $(value PROGRAMMER),-c 'hla_serial $(PROGRAMMER)',) \
 		-f target/stm32f4x.cfg
 
-
 all:
 	@tup --quiet --no-environ-check
+
+gen_compiledb:
+	@tup generate build_cmds.bat
+	@compiledb --parse build_cmds.bat
 
 flash: all
 	$(OPENOCD) -c init \

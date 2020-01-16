@@ -24,7 +24,6 @@ void Encoder::setup() {
     HAL_TIM_Encoder_Start(hw_config_.timer, TIM_CHANNEL_ALL);
     set_idx_subscribe();
     init_cs_gpio_pin(config_.default_cs_pin);
-    osDelay(100);
     if (config_.ask_abs_enc_on_setup)
         update_encoder_spi();
 }
@@ -213,7 +212,7 @@ uint8_t enc_spi_tx_rx(SPI_HandleTypeDef* spi, int cs_pin, HAL_StatusTypeDef* sta
     HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_RESET);
     *status = HAL_SPI_TransmitReceive(spi, &send, &recv, 1, 1000);
     HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_SET);
-    osDelay(1);
+    delay_us(10);
 
     return recv;
 }

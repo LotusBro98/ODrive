@@ -298,6 +298,56 @@ int32_t Encoder::update_encoder_spi(){
     return enc;
 }
 
+int Encoder::reset_encoder_spi(int cs_pin) {
+    uint32_t cr1, cr2;
+    SPI_InitTypeDef init;
+
+    init_cs_gpio_pin(cs_pin);
+
+    init = hspi3.Init;
+    cr1 = hspi3.Instance->CR1;
+    cr2 = hspi3.Instance->CR2;
+
+    HAL_StatusTypeDef status;
+
+    SPI_HandleTypeDef* spi = &hspi3;
+
+    status = init_spi(spi);
+    if (status != HAL_OK) goto error;
+
+    enc_spi_tx_rx(spi, cs_pin, &status, 0x70);
+    if (status != HAL_OK) goto error;
+
+    hspi3.Instance->CR1 = cr1;
+    hspi3.Instance->CR2 = cr2;
+    hspi3.Init = init;
+    status = HAL_SPI_DeInit(spi);
+    if (status != HAL_OK)
+        return status;
+    status = HAL_SPI_Init(spi);
+
+    return 0;
+
+    error:
+    hspi3.Instance->CR1 = cr1;
+    hspi3.Instance->CR2 = cr2;
+    hspi3.Init = init;
+    status = HAL_SPI_DeInit(spi);
+    if (status != HAL_OK)
+        return status;
+    status = HAL_SPI_Init(spi);
+
+    return -1;
+}
+
+int32_t Encoder::set_zero_pos(){
+    int res = reset_encoder_spi(config_.default_cs_pin);
+    if (res == 0) {
+        set_linear_count(0);
+    }
+    return res;
+}
+
 // @brief Turns the motor in one direction for a bit and then in the other
 // direction in order to find the offset between the electrical phase 0
 // and the encoder state 0.

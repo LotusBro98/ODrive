@@ -62,6 +62,9 @@ public:
     int get_encoder_spi(int cs_pin);
     int32_t update_encoder_spi();
 
+    int reset_encoder_spi(int cs_pin);
+    int32_t set_zero_pos();
+
     void set_linear_count(int32_t count);
     void set_circular_count(int32_t count, bool update_offset);
     bool calib_enc_offset(float voltage_magnitude);
@@ -139,7 +142,8 @@ public:
                 make_protocol_property("ask_abs_enc_on_setup", &config_.ask_abs_enc_on_setup)
             ),
             make_protocol_function("set_linear_count", *this, &Encoder::set_linear_count, "count"),
-            make_protocol_function("update_encoder_spi", *this, &Encoder::update_encoder_spi)
+            make_protocol_function("update_encoder_spi", *this, &Encoder::update_encoder_spi),
+            make_protocol_function("set_zero_pos", *this, &Encoder::set_zero_pos)
         );
     }
 };

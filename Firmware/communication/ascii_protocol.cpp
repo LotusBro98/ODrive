@@ -189,6 +189,7 @@ void ASCII_protocol_process_line(const uint8_t* buffer, size_t len, StreamSink& 
         respond(response_channel, use_checksum, "Velocity: v axis vel I-ff");
         respond(response_channel, use_checksum, "Current: c axis I");
         respond(response_channel, use_checksum, "Update encoder via SPI: e axis");
+        respond(response_channel, use_checksum, "Get temp: T axis");
         respond(response_channel, use_checksum, "");
         respond(response_channel, use_checksum, "Properties start at odrive root, such as axis0.requested_state");
         respond(response_channel, use_checksum, "Read: r property");
@@ -261,6 +262,19 @@ void ASCII_protocol_process_line(const uint8_t* buffer, size_t len, StreamSink& 
             int enc = axes[motor]->encoder_.update_encoder_spi();
             char response[8];
             sprintf(response, "%d", enc);
+            respond(response_channel, use_checksum, response);
+        }
+    } else if (cmd[0] == 'T') { // get temperature
+        int motor;
+        int numscan = sscanf(cmd, "e %d", &motor);
+        if (numscan < 1) {
+            respond(response_channel, use_checksum, "invalid command format");
+        } else if (motor < 0 || motor > 1) {
+            respond(response_channel, use_checksum, "invalid motor number");
+        } else {
+            double temp = axes[motor]->motor_.get_inverter_temp();
+            char response[32];
+            sprintf(response, "%f", temp);
             respond(response_channel, use_checksum, response);
         }
     } else if (cmd[0] == 'u') { // Update axis watchdog.

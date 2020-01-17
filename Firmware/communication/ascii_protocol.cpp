@@ -266,7 +266,7 @@ void ASCII_protocol_process_line(const uint8_t* buffer, size_t len, StreamSink& 
         }
     } else if (cmd[0] == 'T') { // get temperature
         int motor;
-        int numscan = sscanf(cmd, "e %d", &motor);
+        int numscan = sscanf(cmd, "T %d", &motor);
         if (numscan < 1) {
             respond(response_channel, use_checksum, "invalid command format");
         } else if (motor < 0 || motor > 1) {

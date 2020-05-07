@@ -21,12 +21,16 @@ static void enc_index_cb_wrapper(void* ctx) {
 int init_cs_gpio_pin(int pin);
 
 void Encoder::setup() {
+    int retries = 5;
+
     HAL_TIM_Encoder_Start(hw_config_.timer, TIM_CHANNEL_ALL);
     set_idx_subscribe();
     init_cs_gpio_pin(config_.default_cs_pin);
     if (config_.ask_abs_enc_on_setup) {
-        delay_us(200'000);
-        update_encoder_spi();
+        for (int retries = 10; retries > 0; retries--) {
+            delay_us(200'000);
+            update_encoder_spi();
+        }
     }
 }
 
@@ -177,7 +181,7 @@ int init_cs_gpio_pin(int pin) {
 
     // Write pin high
     HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_SET);
-    delay_us(10);
+    delay_us(20);
 
     return true;
 }
@@ -286,14 +290,15 @@ int Encoder::get_encoder_spi(int cs_pin) {
 
 int32_t Encoder::update_encoder_spi(){
     int enc;
-    for (int retries = 10; retries > 0; retries--) {
+    //for (int retries = 10; retries > 0; retries--) {
         enc = get_encoder_spi(config_.default_cs_pin);
         if (enc >= 0) {
             set_linear_count(enc);
+            set_circular_count(enc, false);
             is_ready_ = true;
             return enc;
         }
-    }
+   // }
     return enc;
 }
 
@@ -448,6 +453,7 @@ bool Encoder::run_offset_calibration() {
     config_.offset = encvaluesum / (num_steps * 2);
     int32_t residual = encvaluesum - ((int64_t)config_.offset * (int64_t)(num_steps * 2));
     config_.offset_float = (float)residual / (float)(num_steps * 2) + 0.5f; // add 0.5 to center-align state to phase
+    config_.offset %= (config_.cpr / axis_->motor_.config_.pole_pairs);
 
     is_ready_ = true;
     return true;

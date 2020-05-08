@@ -14,7 +14,7 @@ import threading
 import traceback
 import argparse
 from odrive.tests import *
-from odrive.utils import Logger, Event
+from fibre.utils import Logger, Event
 
 
 def for_all_parallel(objects, get_name, callback):

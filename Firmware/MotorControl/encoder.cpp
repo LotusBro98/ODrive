@@ -21,11 +21,17 @@ static void enc_index_cb_wrapper(void* ctx) {
 int init_cs_gpio_pin(int pin);
 
 void Encoder::setup() {
-    int retries = 5;
-
     HAL_TIM_Encoder_Start(hw_config_.timer, TIM_CHANNEL_ALL);
     set_idx_subscribe();
+    //+++++++++++++ LotusBro +++++++++++++//
+    // Инициализация GPIO пина, который используется как CS в протоколе SPI.
+    // Теперь его нельзя использоватьдля другой цели.
     init_cs_gpio_pin(config_.default_cs_pin);
+    // Связываемся с абс. энкодером для запроса текущего положения.
+    // В даташите AMT-203 написано, что необходимо подождать 200 мс пока прогрузится контроллер энкодера
+    // Иногда из-за медленного включения питания, необходимо подождать больше
+    // Иногда бывает что он уже готов к этому моменту выполнения
+    // Поэтому делаем несколько попыток связаться. Максимум на это уйдет 2 секунды, минимум 0
     if (config_.ask_abs_enc_on_setup) {
         for (int retries = 10; retries > 0; retries--) {
             // Делаем попытку связаться
@@ -35,7 +41,10 @@ void Encoder::setup() {
             // Ждем 200 мс как указано в даташите до следующей попытки
             delay_us(200'000);
         }
+        // Если ни разу не удалось связаться, что-то не так с подключением,
+        // encoder.is_ready = False
     }
+    //------------- LotusBro -------------//
 }
 
 void Encoder::set_error(Error_t error) {
@@ -170,11 +179,13 @@ bool Encoder::run_direction_find() {
     return status;
 }
 
+//+++++++++++++ LotusBro +++++++++++++//
+// Функция инициальзации GPIO пина в качестве CS в SPI
 int init_cs_gpio_pin(int pin) {
     auto abs_spi_cs_port_ = get_gpio_port_by_pin(pin);
     auto abs_spi_cs_pin_ = get_gpio_pin_by_pin(pin);
 
-    // Init cs pin
+    // Задаем параметры порта (OUTPUT и прочее)
     HAL_GPIO_DeInit(abs_spi_cs_port_, abs_spi_cs_pin_);
     GPIO_InitTypeDef GPIO_InitStruct;
     GPIO_InitStruct.Pin = abs_spi_cs_pin_;
@@ -183,13 +194,17 @@ int init_cs_gpio_pin(int pin) {
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(abs_spi_cs_port_, &GPIO_InitStruct);
 
-    // Write pin high
+    // Выставляем в 1, пока нет передачи, согласно протоколу SPI
     HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_SET);
+    // Для обеспечения минимального временного интервала между передачами,
+    // чтобы энкодер успел среагировать на изменение состояния CS пина
+    // (признак конца транзакции - переключение CS)
     delay_us(20);
 
     return true;
 }
 
+// Инициализация SPI для работы с AMT-203.
 HAL_StatusTypeDef init_spi(SPI_HandleTypeDef* spi) {
     spi->Init.Mode = SPI_MODE_MASTER;
     spi->Init.Direction = SPI_DIRECTION_2LINES;
@@ -213,47 +228,64 @@ HAL_StatusTypeDef init_spi(SPI_HandleTypeDef* spi) {
     return status;
 }
 
+// Передача байта данных энкодеру и получение ответа
 uint8_t enc_spi_tx_rx(SPI_HandleTypeDef* spi, int cs_pin, HAL_StatusTypeDef* status, uint8_t send) {
     auto abs_spi_cs_port_ = get_gpio_port_by_pin(cs_pin);
     auto abs_spi_cs_pin_ = get_gpio_pin_by_pin(cs_pin);
 
     uint8_t recv;
 
+    // Начинаем передачу, выставляем CS в 0
     HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_RESET);
-    *status = HAL_SPI_TransmitReceive(spi, &send, &recv, 1, 1000);
+    // Системная функция передачи по SPI
+    *status = HAL_SPI_TransmitReceive(spi, &send, &recv, 1 /* 1 байт */, 1000 /*таймаут в мс */);
+    // Передача закончена, убираем CS обратно в 1
     HAL_GPIO_WritePin(abs_spi_cs_port_, abs_spi_cs_pin_, GPIO_PIN_SET);
+    // Для обеспечения минимального временного интервала между передачами,
+    // чтобы энкодер успел среагировать на изменение состояния CS пина
+    // (признак конца транзакции - переключение CS)
     delay_us(20);
 
     return recv;
 }
 
+// Запросить у энкодера абс. положение по SPI
 int Encoder::get_encoder_spi(int cs_pin) {
-    uint32_t enc;
-    uint32_t cr1, cr2;
-    uint8_t recv;
-    uint8_t msb, lsb;
-    int retries = 10;
-    SPI_InitTypeDef init;
+    uint32_t enc;           // Положение энкодера
+    uint32_t cr1, cr2;      // Буферы прошлого состояния SPI регистров
+    SPI_InitTypeDef init;   // Буфер прошлых данных для инициализации SPI
+    uint8_t recv;           // Буфер для приема
+    uint8_t msb, lsb;       // Старший и младший байты положения энкодера
+    int retries = 10;       // Максимальное число попыток считывания после запроса положения
 
-
+    // Подготавливаем CS пин для работы по SPI
     init_cs_gpio_pin(cs_pin);
 
+    // Сохраняем прошлое состояние SPI в буфер,
+    // так как вне этой функции может происходить общение с другими устройствами
+    // (драйверы моторов, другой энкодер)
     init = hspi3.Init;
     cr1 = hspi3.Instance->CR1;
     cr2 = hspi3.Instance->CR2;
 
     HAL_StatusTypeDef status;
 
+    // Получаем указатель на структуру с состоянием нужного нам SPI
     SPI_HandleTypeDef* spi = &hspi3;
 
+    // Инициализируем SPI для работы с AMT-203
     status = init_spi(spi);
     if (status != HAL_OK) goto error;
 
+    // Дальше идет общение согласно даташиту AMT-203
+
+    // Запрашиваем команду READ (0x10)
     recv = enc_spi_tx_rx(spi, cs_pin, &status, 0x10);
     if (status != HAL_OK) goto error;
     recv = enc_spi_tx_rx(spi, cs_pin, &status, 0x10);
     if (status != HAL_OK) goto error;
 
+    // Спрашиваем о готовности, пока энкодер не вернет 0x10
     while (recv != 0x10) {
         recv = enc_spi_tx_rx(spi, cs_pin, &status, 0x00);
         if (status != HAL_OK) goto error;
@@ -262,14 +294,20 @@ int Encoder::get_encoder_spi(int cs_pin) {
             goto error;
     }
 
+    // Следующие два байта это старший и младший байты нужного нам числа (положения энкодера)
+
+    // Считываем старший
     msb = enc_spi_tx_rx(spi, cs_pin, &status, 0x00) & 0x0F;
     if (status != HAL_OK) goto error;
 
+    // Считываем младший
     lsb = enc_spi_tx_rx(spi, cs_pin, &status, 0x00);
     if (status != HAL_OK) goto error;
 
+    // Объединяем
     enc = ((uint32_t)msb) << 8 | (uint32_t)lsb;
 
+    // Завершаем работу с SPI, возвращаем в регистры прошлые значения и заново инициализируем
     hspi3.Instance->CR1 = cr1;
     hspi3.Instance->CR2 = cr2;
     hspi3.Init = init;
@@ -278,9 +316,12 @@ int Encoder::get_encoder_spi(int cs_pin) {
         return status;
     status = HAL_SPI_Init(spi);
 
+    // Возвращаем положение энкодера
     return enc;
 
     error:
+    // В случае ошибки
+    // Завершаем работу с SPI, возвращаем в регистры прошлые значения и заново инициализируем
     hspi3.Instance->CR1 = cr1;
     hspi3.Instance->CR2 = cr2;
     hspi3.Init = init;
@@ -289,43 +330,50 @@ int Encoder::get_encoder_spi(int cs_pin) {
         return status;
     status = HAL_SPI_Init(spi);
 
+    // Возвращаем -1
     return -1;
 }
 
+// Запросить положение энкодера по SPI и обновить его в переменных ODrive
 int32_t Encoder::update_encoder_spi(){
-    int enc;
-    //for (int retries = 10; retries > 0; retries--) {
-        enc = get_encoder_spi(config_.default_cs_pin);
-        if (enc >= 0) {
-            set_linear_count(enc);
-            set_circular_count(enc, false);
-            is_ready_ = true;
-            return enc;
-        }
-   // }
+    int enc = get_encoder_spi(config_.default_cs_pin);
+    if (enc >= 0) {
+        set_linear_count(enc);
+        set_circular_count(enc, false);
+        is_ready_ = true;
+    }
     return enc;
 }
 
+// Функция для связи по SPI и установки  положения энкодера в 0
 int Encoder::reset_encoder_spi(int cs_pin) {
-    uint32_t cr1, cr2;
-    SPI_InitTypeDef init;
+    uint32_t cr1, cr2;          // Буферы прошлого состояния SPI регистров
+    SPI_InitTypeDef init;       // Буфер прошлых данных для инициализации SPI
 
+    // Подготавливаем CS пин для работы по SPI
     init_cs_gpio_pin(cs_pin);
 
+    // Сохраняем прошлое состояние SPI в буфер,
+    // так как вне этой функции может происходить общение с другими устройствами
+    // (драйверы моторов, другой энкодер)
     init = hspi3.Init;
     cr1 = hspi3.Instance->CR1;
     cr2 = hspi3.Instance->CR2;
 
     HAL_StatusTypeDef status;
 
+    // Получаем указатель на структуру с состоянием нужного нам SPI
     SPI_HandleTypeDef* spi = &hspi3;
 
+    // Инициализируем SPI для работы с AMT-203
     status = init_spi(spi);
     if (status != HAL_OK) goto error;
 
+    // Передаем энкодеру команду RESET (0x70)
     enc_spi_tx_rx(spi, cs_pin, &status, 0x70);
     if (status != HAL_OK) goto error;
 
+    // Завершаем работу с SPI
     hspi3.Instance->CR1 = cr1;
     hspi3.Instance->CR2 = cr2;
     hspi3.Init = init;
@@ -334,9 +382,12 @@ int Encoder::reset_encoder_spi(int cs_pin) {
         return status;
     status = HAL_SPI_Init(spi);
 
+    // Возвращаем 0
     return 0;
 
     error:
+    // В случае ошибки
+    // Завершаем работу с SPI
     hspi3.Instance->CR1 = cr1;
     hspi3.Instance->CR2 = cr2;
     hspi3.Init = init;
@@ -345,9 +396,12 @@ int Encoder::reset_encoder_spi(int cs_pin) {
         return status;
     status = HAL_SPI_Init(spi);
 
+    // Возвращаем -1
     return -1;
 }
 
+// Установить положение энкодера в 0.
+// offset становится не валидным, необходимо перекалиброваться.
 int32_t Encoder::set_zero_pos(){
     int res = reset_encoder_spi(config_.default_cs_pin);
     if (res == 0) {
@@ -355,6 +409,7 @@ int32_t Encoder::set_zero_pos(){
     }
     return res;
 }
+//------------- LotusBro -------------//
 
 // @brief Turns the motor in one direction for a bit and then in the other
 // direction in order to find the offset between the electrical phase 0
@@ -457,7 +512,6 @@ bool Encoder::run_offset_calibration() {
     config_.offset = encvaluesum / (num_steps * 2);
     int32_t residual = encvaluesum - ((int64_t)config_.offset * (int64_t)(num_steps * 2));
     config_.offset_float = (float)residual / (float)(num_steps * 2) + 0.5f; // add 0.5 to center-align state to phase
-    config_.offset %= (config_.cpr / axis_->motor_.config_.pole_pairs);
 
     is_ready_ = true;
     return true;

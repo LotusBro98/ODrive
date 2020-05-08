@@ -33,11 +33,12 @@ public:
     // General params
     float readFloat();
     int32_t readInt();
+	String readString();
 
     // State helper
     bool run_state(int axis, int requested_state, bool wait);
 private:
-    String readString();
+    
 
     Stream& serial_;
 };

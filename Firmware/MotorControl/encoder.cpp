@@ -28,8 +28,12 @@ void Encoder::setup() {
     init_cs_gpio_pin(config_.default_cs_pin);
     if (config_.ask_abs_enc_on_setup) {
         for (int retries = 10; retries > 0; retries--) {
+            // Делаем попытку связаться
+            if (update_encoder_spi() >= 0)
+                // Если успешно, положение обновилось, encoder.is_ready = True, выходим из цикла
+                break;
+            // Ждем 200 мс как указано в даташите до следующей попытки
             delay_us(200'000);
-            update_encoder_spi();
         }
     }
 }

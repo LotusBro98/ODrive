@@ -251,6 +251,7 @@ void ASCII_protocol_process_line(const uint8_t* buffer, size_t len, StreamSink& 
                     respond(response_channel, use_checksum, "not implemented");
             }
         }
+    //+++++++++++++ LotusBro +++++++++++++//
     } else if (cmd[0] == 'e') { // update encoder
         int motor;
         int numscan = sscanf(cmd, "e %d", &motor);
@@ -264,6 +265,7 @@ void ASCII_protocol_process_line(const uint8_t* buffer, size_t len, StreamSink& 
             sprintf(response, "%d", enc);
             respond(response_channel, use_checksum, response);
         }
+    //------------- LotusBro -------------//
     } else if (cmd[0] == 'T') { // get temperature
         int motor;
         int numscan = sscanf(cmd, "T %d", &motor);

@@ -1041,6 +1041,9 @@ valuetypes:
       SpiAbsRls:
         value: 0x103
         doc: RLS Encoders
+      SpiAbsAmt203:
+        value: 0x1ff
+        doc: AMT203
 
   ODrive.Controller.ControlMode:
     values:

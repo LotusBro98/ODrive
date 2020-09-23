@@ -37,10 +37,14 @@ void Encoder::setup() {
 
     mode_ = config_.mode;
 
+    if (mode_ == MODE_SPI_ABS_AMT203) {
+        abs_spi_dma_tx_[0] = 0x10;
+    }
+
     spi_task_.config = {
         .Mode = SPI_MODE_MASTER,
         .Direction = SPI_DIRECTION_2LINES,
-        .DataSize = SPI_DATASIZE_16BIT,
+        .DataSize = mode_ == MODE_SPI_ABS_AMT203 ? SPI_DATASIZE_8BIT : SPI_DATASIZE_16BIT,
         .CLKPolarity = mode_ == MODE_SPI_ABS_AEAT ? SPI_POLARITY_HIGH : SPI_POLARITY_LOW,
         .CLKPhase = SPI_PHASE_2EDGE,
         .NSS = SPI_NSS_SOFT,
@@ -304,6 +308,8 @@ bool Encoder::run_offset_calibration() {
     config_.offset_float = (float)residual / (float)(num_steps * 2) + 0.5f;  // add 0.5 to center-align state to phase
 
     is_ready_ = true;
+    if (config_.mode == MODE_SPI_ABS_AMT203)
+        config_.pre_calibrated = true;
     return true;
 }
 
@@ -336,6 +342,7 @@ void Encoder::sample_now() {
 
         case MODE_SPI_ABS_AMS:
         case MODE_SPI_ABS_CUI:
+        case MODE_SPI_ABS_AMT203:
         case MODE_SPI_ABS_AEAT:
         case MODE_SPI_ABS_RLS:
         {
@@ -374,8 +381,8 @@ bool Encoder::abs_spi_start_transaction(){
         
         if (Stm32SpiArbiter::acquire_task(&spi_task_)) {
             spi_task_.ncs_gpio = abs_spi_cs_gpio_;
-            spi_task_.tx_buf = (uint8_t*)abs_spi_dma_tx_;
-            spi_task_.rx_buf = (uint8_t*)abs_spi_dma_rx_;
+            spi_task_.tx_buf = (uint8_t*)(abs_spi_dma_tx_ + abs_spi_buf_index);
+            spi_task_.rx_buf = (uint8_t*)(abs_spi_dma_rx_ + abs_spi_buf_index);
             spi_task_.length = 1;
             spi_task_.on_complete = [](void* ctx, bool success) { ((Encoder*)ctx)->abs_spi_cb(success); };
             spi_task_.on_complete_ctx = this;
@@ -430,6 +437,59 @@ void Encoder::abs_spi_cb(bool success) {
                 goto done;
             }
             pos = rawVal & 0x3fff;
+        } break;
+
+        case MODE_SPI_ABS_AMT203:
+        {
+            int buf_size = sizeof(abs_spi_dma_rx_) / sizeof(uint16_t);
+            abs_spi_buf_index = (abs_spi_buf_index + 1) % (buf_size);
+
+            int i;
+            for (i = 0; i < buf_size; i++)
+                if (i + 2 < buf_size && abs_spi_dma_rx_[i] == 0x10)
+                    break;
+            if (i == buf_size) {
+                abs_spi_buf_index = 0;
+                goto done;
+            }
+
+            if (i + 3 == abs_spi_buf_index) {
+                uint16_t rawVal = (abs_spi_dma_rx_[i + 1] << 8) + (abs_spi_dma_rx_[i + 2]);
+                pos = rawVal & 0x0fff;
+                if (abs_spi_calib_ticks < 100 && fabs(pos - pos_abs_) > 1024) {
+                    pos = pos_abs_;
+                } else {
+                    abs_spi_pos_buffer[abs_spi_calib_ticks--] = pos;
+                    if (abs_spi_calib_ticks == 0) {
+                        // --- find most frequent value
+                        int cnt[CALIB_TICKS]= {};
+                        for (int i = 0; i < CALIB_TICKS; i++) {
+                            int j;
+                            for (j = 0; j < i; j++) {
+                                if (abs_spi_pos_buffer[j] == abs_spi_pos_buffer[i])
+                                    break;
+                            }
+                            cnt[j]++;
+                        }
+                        int maxC = cnt[0];
+                        int maxI = 0;
+                        for (int i = 0; i < CALIB_TICKS; i++) {
+                            if (cnt[i] > maxC) {
+                                maxC = cnt[i];
+                                maxI = i;
+                            }
+                        }
+                        pos = abs_spi_pos_buffer[maxI];
+                        // ---
+
+                        set_linear_count(pos);
+                        set_circular_count(pos, false);
+                        mode_ = MODE_INCREMENTAL;
+                    }
+                }
+            } else {
+                pos = pos_abs_;
+            }
         } break;
 
         case MODE_SPI_ABS_RLS: {
@@ -503,7 +563,8 @@ bool Encoder::update() {
         
         case MODE_SPI_ABS_RLS:
         case MODE_SPI_ABS_AMS:
-        case MODE_SPI_ABS_CUI: 
+        case MODE_SPI_ABS_CUI:
+        case MODE_SPI_ABS_AMT203:
         case MODE_SPI_ABS_AEAT: {
             if (abs_spi_pos_updated_ == false) {
                 // Low pass filter the error

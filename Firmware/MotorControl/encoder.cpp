@@ -456,35 +456,36 @@ void Encoder::abs_spi_cb(bool success) {
             if (i + 3 == abs_spi_buf_index) {
                 uint16_t rawVal = (abs_spi_dma_rx_[i + 1] << 8) + (abs_spi_dma_rx_[i + 2]);
                 pos = rawVal & 0x0fff;
-                if (abs_spi_calib_ticks < 100 && fabs(pos - pos_abs_) > 1024) {
-                    pos = pos_abs_;
-                } else {
-                    abs_spi_pos_buffer[abs_spi_calib_ticks--] = pos;
-                    if (abs_spi_calib_ticks == 0) {
-                        // --- find most frequent value
-                        int cnt[CALIB_TICKS]= {};
-                        for (int i = 0; i < CALIB_TICKS; i++) {
-                            int j;
-                            for (j = 0; j < i; j++) {
-                                if (abs_spi_pos_buffer[j] == abs_spi_pos_buffer[i])
-                                    break;
-                            }
-                            cnt[j]++;
+                abs_spi_pos_buffer[abs_spi_calib_ticks--] = pos;
+                if (abs_spi_calib_ticks == 0) {
+                    // --- find most frequent value
+                    int cnt[CALIB_TICKS]= {};
+                    for (int i = 0; i < CALIB_TICKS; i++) {
+                        int j;
+                        for (j = 0; j < i; j++) {
+                            if (abs_spi_pos_buffer[j] == abs_spi_pos_buffer[i])
+                                break;
                         }
-                        int maxC = cnt[0];
-                        int maxI = 0;
-                        for (int i = 0; i < CALIB_TICKS; i++) {
-                            if (cnt[i] > maxC) {
-                                maxC = cnt[i];
-                                maxI = i;
-                            }
+                        cnt[j]++;
+                    }
+                    int maxC = cnt[0];
+                    int maxI = 0;
+                    for (int i = 0; i < CALIB_TICKS; i++) {
+                        if (cnt[i] > maxC) {
+                            maxC = cnt[i];
+                            maxI = i;
                         }
+                    }
+                    // ---
+                    if (maxC > CALIB_TICKS / 2) {
                         pos = abs_spi_pos_buffer[maxI];
-                        // ---
 
                         set_linear_count(pos);
                         set_circular_count(pos, false);
                         mode_ = MODE_INCREMENTAL;
+                    } else {
+                        set_error(ERROR_ABS_SPI_COM_FAIL);
+                        goto done;
                     }
                 }
             } else {

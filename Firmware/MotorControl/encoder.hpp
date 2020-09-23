@@ -121,7 +121,7 @@ public:
     uint32_t abs_spi_cr2;
     uint16_t abs_spi_dma_tx_[8] = {0xFFFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint16_t abs_spi_dma_rx_[8] = {};
-    static const int CALIB_TICKS = 128;
+    static const int CALIB_TICKS = 32;
     int abs_spi_calib_ticks = CALIB_TICKS;
     int abs_spi_pos_buffer[CALIB_TICKS];
     int abs_spi_buf_index = 0;
